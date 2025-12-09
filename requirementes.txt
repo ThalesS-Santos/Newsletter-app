@@ -1,9 +1,0 @@
-# Arquivo requirements.txt corrigido e limpo
-streamlit
-pandas
-requests
-google-genai  == 1.31.0
-GoogleNews
-pydantic
-numpy
-scikit-learn
