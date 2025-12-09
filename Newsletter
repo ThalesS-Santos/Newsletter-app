@@ -4,6 +4,7 @@ import requests
 import json
 import time
 import numpy as np
+import concurrent.futures
 from datetime import datetime
 from typing import List
 
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 
 
 # --- Configuração das Chaves de API ---
+# Certifique-se de que st.secrets esteja configurado corretamente
 JINA_API_KEY = st.secrets['JINA_API_KEY']
 GEMINI_API_KEY = st.secrets['GEMINI_API_KEY']
 
@@ -24,11 +26,11 @@ def buscar_google_news(termo):
     # Inicializa o objeto GoogleNews com os parâmetros desejados
     googlenews = GoogleNews(
         lang='pt-BR',        # Define o idioma para português do Brasil
-        period='1d',         # Define o período para os últimos 7 dias
+        period='1d',         # Define o período para os últimos 7 dias (ou 1d conforme seu código)
         encode='utf-8'       # Define a codificação para UTF-8
     )
 
-    # Realiza a busca por notícias relacionadas ao termo 'tecnologia'
+    # Realiza a busca por notícias
     googlenews.search(termo)
 
     # Define o número máximo de resultados desejados
@@ -48,7 +50,7 @@ def buscar_google_news(termo):
     # Limita a lista de resultados ao número máximo desejado
     resultados = resultados[:max_resultados]
 
-    # Separandos as noticias
+    # Separando as noticias
     links_noticias = [noticia['link'].split('&ved')[0] for noticia in resultados]
 
     # Exibe os resultados
@@ -56,43 +58,34 @@ def buscar_google_news(termo):
     print(f'Quantidade de notícias retornadas do GoogleNews: {quantidade_noticias}')
 
     # Coloca todas as noticias num dataframe
-    import pandas as pd
     df = pd.DataFrame(resultados)
-    df['link'] = df['link'].str.split('&ved').str[0]
-    # a coluna media deve ser renomeada para source
-    df.rename(columns={'media': 'source'}, inplace=True)
-    # dropar datetime e img
-    df.drop(columns=['datetime', 'img'], inplace=True)
+    if not df.empty:
+        df['link'] = df['link'].str.split('&ved').str[0]
+        # a coluna media deve ser renomeada para source
+        if 'media' in df.columns:
+            df.rename(columns={'media': 'source'}, inplace=True)
+        # dropar datetime e img se existirem
+        cols_to_drop = [col for col in ['datetime', 'img'] if col in df.columns]
+        df.drop(columns=cols_to_drop, inplace=True)
 
     return df
-
-
 
 def pega_noticias(INTERESSE):
     """
     Usa o interesse do usuário, utiliza o Gemini para extrair palavras-chave e gerar temas de busca,
     pesquisa no Google News para cada tema e retorna um DataFrame combinado e limpo.
     """
-    # ADICIONADO: A biblioteca 'google.genai' é importada dentro da função, conforme o código original.
-    from google import genai
-    # ADICIONADO: A biblioteca 'pandas' é importada como 'pd', conforme o código original.
-    import pandas as pd
-
-    # ADICIONADO: O cliente Gemini é inicializado aqui para a geração de temas.
     client = genai.Client(api_key = GEMINI_API_KEY)
 
-    # ADICIONADO: O prompt para o Gemini gerar os temas de busca com base no interesse do usuário.
     prompt = f"""
     Dado o seguinte interesse do usuário, extraia palavras-chave relevantes e gere 3 a 5 temas de busca relacionados que podem ser usados para encontrar notícias no Google News.
     Formato de saída: Uma lista de strings, onde cada string é um tema de busca.
-
     Interesse do usuário: {INTERESSE}
     """
 
-    # ADICIONADO: Bloco try-except para a chamada da API Gemini e geração de temas.
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash", # MANTIDO: O modelo do Gemini não foi alterado, conforme solicitado.
+            model="gemini-2.5-flash",
             contents=prompt,
             config={
                 "response_mime_type": "application/json",
@@ -103,33 +96,30 @@ def pega_noticias(INTERESSE):
         print("Temas de busca gerados por Gemini:", search_themes)
     except Exception as e:
         print(f"Erro ao gerar temas de busca com Gemini: {e}")
-        return pd.DataFrame() # Retorna um DataFrame vazio em caso de falha.
+        return pd.DataFrame() 
 
-    # ADICIONADO: Inicialização de um DataFrame vazio para armazenar todas as notícias.
     all_news_df = pd.DataFrame()
 
-    # ADICIONADO: Loop que itera sobre os temas gerados e busca notícias para cada um.
     for theme in search_themes:
         print(f"Buscando notícias para o tema: {theme}")
-        # A função 'buscar_google_news' existente no CÓDIGO 2 é chamada aqui.
         news_df = buscar_google_news(theme)
         if not news_df.empty:
             news_df['search_theme'] = theme
             all_news_df = pd.concat([all_news_df, news_df], ignore_index=True)
 
-    # ADICIONADO: Bloco para limpar e remover duplicatas do DataFrame combinado.
     if not all_news_df.empty:
         all_news_df.dropna(subset=['link'], inplace=True)
         all_news_df = all_news_df.drop_duplicates(subset=['link'], keep='first')
-        all_news_df = all_news_df.drop_duplicates(subset=['title'], keep='first')
+        if 'title' in all_news_df.columns:
+            all_news_df = all_news_df.drop_duplicates(subset=['title'], keep='first')
         all_news_df.reset_index(drop=True, inplace=True)
 
-    # ADICIONADO: Mensagem final informando o total de notícias únicas encontradas.
     print(f"Busca combinada concluída! {all_news_df.shape[0]} notícias únicas encontradas.")
-    # ADICIONADO: Retorno do DataFrame final com todas as notícias.
     return all_news_df
 
 def ordenar_noticias_por_similaridade(interesse, df_noticias, top_n=10):
+    if df_noticias.empty:
+        return df_noticias
 
     TEXTOS = df_noticias['title'].to_list()
 
@@ -152,54 +142,60 @@ def ordenar_noticias_por_similaridade(interesse, df_noticias, top_n=10):
         ).embeddings
         VETORES.extend([np.array(e.values) for e in embeddings_result])
 
-    # Certifique-se de que interesse_embed é um array numpy 2D (necessário para cosine_similarity)
     interesse_embed_2d = interesse_embed.reshape(1, -1)
-
-    # Calcular a similaridade de cosseno entre o vetor de interesse e cada vetor na lista VETORES
     similaridades = [cosine_similarity(interesse_embed_2d, v.reshape(1, -1))[0][0] for v in VETORES]
 
-    # Adicionar as similaridades ao DataFrame
     df_noticias['score'] = similaridades
-
-    # Ordenar o DataFrame pelo score
     df_noticias.sort_values(by='score', ascending=False, inplace = True)
 
-    # Retornar apenas as top_n notícias e resetar o index
     return df_noticias.head(top_n).reset_index(drop=True)
 
+def _fetch_single_article(url, headers, title):
+    """Função auxiliar para buscar um único artigo (usada no paralelismo)."""
+    try:
+        response = requests.get(url, headers=headers, timeout=90)
+        response.raise_for_status()
+        return response.text
+    except requests.exceptions.RequestException as e:
+        return f"Erro ao buscar conteúdo para o título '{title}': {e}"
+
 def extrair_conteudo_noticias(df_noticias):
-    """Extrai o conteúdo completo dos artigos usando a Jina AI API."""
+    """Extrai o conteúdo completo dos artigos usando a Jina AI API com paralelismo."""
     headers = {
         "Authorization": f"Bearer {st.secrets['JINA_API_KEY']}",
         "X-Engine": "browser",
         "X-Return-Format": "markdown"
     }
 
-    total_noticias = len(df_noticias)
-    # Removed Streamlit progress bar and status text
+    # Dicionário para armazenar resultados indexados pelo índice original do DataFrame
+    results = {}
+    
+    print(f"Iniciando extração paralela de {len(df_noticias)} notícias...")
 
-    conteudos = []
-    for index, row in df_noticias.iterrows():
-        print(f"Extraindo notícia {index + 1}/{total_noticias}: {row['title'][:50]}...") # Changed status_text.text to print
-        url = f"https://r.jina.ai/{row['link']}"
-        while True:
+    # MELHORIA: Paralelismo com ThreadPoolExecutor
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        # Mapeia futuros para os índices originais
+        future_to_index = {}
+        for index, row in df_noticias.iterrows():
+            url = f"https://r.jina.ai/{row['link']}"
+            future = executor.submit(_fetch_single_article, url, headers, row['title'])
+            future_to_index[future] = index
+
+        # Processa conforme as tarefas são concluídas
+        for future in concurrent.futures.as_completed(future_to_index):
+            idx = future_to_index[future]
             try:
-                response = requests.get(url, headers=headers, timeout=90)
-                response.raise_for_status()
-                conteudos.append(response.text)
-                break
-            except requests.exceptions.RequestException as e:
-                conteudos.append(f"Erro ao buscar conteúdo para o título '{row['title']}': {e}")
+                content = future.result()
+                results[idx] = content
+            except Exception as e:
+                results[idx] = f"Erro inesperado na thread: {e}"
 
-
-    df_noticias['content'] = conteudos
+    # Atribui os resultados de volta ao DataFrame garantindo a ordem correta
+    # Cria uma lista de conteúdos ordenada pelo índice do DataFrame
+    conteudos_ordenados = [results[i] for i in df_noticias.index]
+    df_noticias['content'] = conteudos_ordenados
+    
     return df_noticias
-
-
-from google import genai
-from pydantic import BaseModel, Field
-import time
-import json
 
 def processa_noticias_com_gemini(articles_df):
     client = genai.Client(api_key = GEMINI_API_KEY)
@@ -220,6 +216,26 @@ def processa_noticias_com_gemini(articles_df):
 
     respostas = []
     for texto in articles_df['content']:
+        # MELHORIA: Feedback de Falha na Extração (Evita chamar a IA para erros)
+        if "Erro ao buscar conteúdo" in texto or "Erro inesperado" in texto:
+            print("Conteúdo com erro detectado. Pulando processamento IA e inserindo placeholder.")
+            # Cria um JSON dummy para manter o alinhamento
+            dummy_data = {
+                "titulo": "Erro ao acessar notícia",
+                "data_de_publicacao": datetime.now().strftime("%d/%m/%Y"),
+                "autor": "Sistema",
+                "portal": "N/A",
+                "resumo_curto": "Não foi possível extrair o conteúdo desta notícia.",
+                "resumo_maior": "O sistema de extração não conseguiu recuperar o texto deste link.",
+                "pontos_principais": [],
+                "noticia_completa": "",
+                "links_de_imagens": [],
+                "tags_relevantes": ["erro"],
+                "prompt_satira_imagem": ""
+            }
+            respostas.append(json.dumps(dummy_data))
+            continue
+
         print(f"Fazendo extração do {texto[:40]}...")
         while True:
             try:
@@ -231,18 +247,11 @@ def processa_noticias_com_gemini(articles_df):
                         "response_schema": Noticia,
                     },
                 )
+                respostas.append(response.text)
                 break
             except Exception as e:
                 print(f"Erro na API: {e} \nTentando novamente em 3s...")
                 time.sleep(3)
-
-
-
-
-        # Use the response as a JSON string.
-        respostas.append(response.text)
-
-
 
     # Converter cada string JSON em um dicionário
     lista_de_dicionarios = [json.loads(json_string) for json_string in respostas]
@@ -252,31 +261,23 @@ def processa_noticias_com_gemini(articles_df):
 
 
 def gerar_card_noticia(noticia: dict, idx: int) -> str:
-    """Gera HTML para um card de notícia a partir de um dicionário (linha do dataframe 'processados')."""
+    """Gera HTML para um card de notícia a partir de um dicionário."""
 
-    # Extrai dados da notícia usando as chaves do dicionário (nomes das colunas do dataframe 'processados')
-    titulo = noticia.get('titulo', '')
+    titulo = noticia.get('titulo', 'Sem título')
     portal = noticia.get('portal', '')
-    data_pub = noticia.get('data_de_publicacao', '') # Usando 'data_de_publicacao'
-    resumo_breve = noticia.get('resumo_curto', '')  # Usando 'resumo_curto'
-    resumo_expandido = noticia.get('resumo_maior', '') # Usando 'resumo_maior'
-    tags = noticia.get('tags_relevantes', []) # Usando 'tags_relevantes'
-    url_original = noticia.get('link', '') # Usando 'link'
-    caminho_imagem = noticia.get('links_de_imagens', []) # Usando 'links_de_imagens' - pode ser uma lista
-    prompt_satira_imagem = noticia.get('prompt_satira_imagem', '') # Usando 'prompt_satira_imagem'
-    pontos_principais = noticia.get('pontos_principais', []) # Usando 'pontos_principais'
+    data_pub = noticia.get('data_de_publicacao', '')
+    resumo_breve = noticia.get('resumo_curto', '')
+    resumo_expandido = noticia.get('resumo_maior', '')
+    tags = noticia.get('tags_relevantes', [])
+    url_original = noticia.get('link', '#') # Link vem do dataframe original (concatenação)
+    caminho_imagem = noticia.get('links_de_imagens', [])
+    prompt_satira_imagem = noticia.get('prompt_satira_imagem', '')
+    pontos_principais = noticia.get('pontos_principais', [])
 
-    # Pega o primeiro link de imagem, se existir, caso contrário, usa uma string vazia
     imagem_url = caminho_imagem[0] if caminho_imagem else ''
-
-    # Converte tags para string
     tags_str = ', '.join(tags) if tags else ''
-
-    # Converte pontos principais para HTML list items
     pontos_principais_html = "".join([f"<li>{p}</li>" for p in pontos_principais]) if pontos_principais else ""
 
-
-    # Gera HTML do card
     card_html = f"""
     <div class="card-noticia">
         <div class="card-header">
@@ -308,7 +309,6 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
             </div>
         </div>
 
-        <!-- Popover content -->
         <div id="popover-resumo-{idx}" class="popover-content" style="display: none;">
             <div class="popover-header">
                 <h4>Resumo Completo</h4>
@@ -342,7 +342,7 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
         <div id="popover-pontos-{idx}" class="popover-content" style="display: none;">
             <div class="popover-header">
                 <h4>Pontos Principais</h4>
-                <span class="close-popover">&times;</span>
+                 <span class="close-popover">&times;</span>
             </div>
              <div class="popover-body">
                  <ul>{pontos_principais_html}</ul>
@@ -350,15 +350,12 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
         </div>
     </div>
     """
-
     return card_html
 
 def gerar_html_newsletter(df: pd.DataFrame, interesse: str) -> str:
     """Gera um arquivo HTML para a newsletter a partir do DataFrame processado."""
 
-    data_atual = datetime.now().strftime("%d/%m/%Y")
-
-    # Início do HTML da newsletter
+    # Início do HTML da newsletter (CSS mantido do original)
     html_content = f"""
     <!DOCTYPE html>
     <html lang="pt-BR">
@@ -367,13 +364,13 @@ def gerar_html_newsletter(df: pd.DataFrame, interesse: str) -> str:
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Newsletter sobre {interesse}</title>
         <style>
-            body {{ font-family: sans-serif; line-height: 1.6; margin: 20px; background-color: #e0e0e0;}} /* Added background color to body */
-            .container {{ max-width: 800px; margin: auto; background: #f9f9f9; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }} /* Added box-shadow to container */
+            body {{ font-family: sans-serif; line-height: 1.6; margin: 20px; background-color: #e0e0e0;}} 
+            .container {{ max-width: 800px; margin: auto; background: #f9f9f9; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }}
             .header {{ text-align: center; margin-bottom: 30px; }}
             .header h1 {{ color: #333; }}
             .header p {{ color: #666; }}
-            .card-noticia {{ border: 1px solid #ddd; margin-bottom: 20px; border-radius: 8px; overflow: hidden; background: #d3dbde; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); position: relative;}} /* Added box-shadow to card and changed background color, added position: relative for popover positioning */
-            .card-header {{ background: #d3dbde; padding: 15px; border-bottom: 1px solid #ddd; }} /* Changed background color to match card */
+            .card-noticia {{ border: 1px solid #ddd; margin-bottom: 20px; border-radius: 8px; overflow: hidden; background: #d3dbde; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); position: relative;}} 
+            .card-header {{ background: #d3dbde; padding: 15px; border-bottom: 1px solid #ddd; }} 
             .card-titulo {{ margin: 0; color: #007bff; }}
             .card-meta {{ font-size: 0.9em; color: #555; margin-top: 5px; }}
             .card-meta span {{ margin-right: 15px; }}
@@ -382,95 +379,19 @@ def gerar_html_newsletter(df: pd.DataFrame, interesse: str) -> str:
             .card-imagem img {{ max-width: 100%; height: auto; border-radius: 4px; }}
             .card-texto {{ flex: 2 1 300px; }}
             .resumo-breve {{ font-weight: normal; margin-bottom: 10px; }}
-            .button-array {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 10px; }} /* Grid for button array */
-            .popover-button {{
-                padding: 10px;
-                background-color: #007bff;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                cursor: pointer;
-                font-size: 0.9em;
-                text-align: center;
-            }}
-            .popover-button:hover {{
-                background-color: #0056b3;
-            }}
-            .btn-ler-mais {{
-                display: block; /* Make it a block element to take full width */
-                width: 100%; /* Make it wider */
-                background-color: #28a745; /* Elegant green color */
-                color: white;
-                padding: 12px 15px; /* Slightly more padding */
-                text-decoration: none;
-                border-radius: 5px;
-                margin-top: 15px; /* Add some space above the button */
-                text-align: center; /* Center the text */
-                font-size: 1.1em; /* Slightly larger font */
-                transition: background-color 0.3s ease; /* Smooth hover effect */
-            }}
-            .btn-ler-mais:hover {{
-                background-color: #218838; /* Darker green on hover */
-            }}
+            .button-array {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 10px; }} 
+            .popover-button {{ padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 0.9em; text-align: center; }}
+            .popover-button:hover {{ background-color: #0056b3; }}
+            .btn-ler-mais {{ display: block; width: 100%; background-color: #28a745; color: white; padding: 12px 15px; text-decoration: none; border-radius: 5px; margin-top: 15px; text-align: center; font-size: 1.1em; transition: background-color 0.3s ease; }}
+            .btn-ler-mais:hover {{ background-color: #218838; }}
             .footer {{ text-align: center; margin-top: 30px; font-size: 0.8em; color: #777; }}
-
-            /* Popover styles */
-            .popover-content {{
-                display: none; /* Hidden by default */
-                position: absolute;
-                background-color: #f9f9f9;
-                box-shadow: 0 8px 16px 0 rgba(0,0,0,0.2);
-                padding: 15px;
-                z-index: 1;
-                border-radius: 8px;
-                max-width: 500px; /* Increased max-width */
-                word-wrap: break-word; /* Break long words */
-                top: 50%; /* Position relative to the card */
-                left: 50%;
-                transform: translate(-50%, -50%); /* Center the popover */
-                border: 1px solid #ddd;
-            }}
-
-            .popover-header {{
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                border-bottom: 1px solid #ddd;
-                padding-bottom: 10px;
-                margin-bottom: 10px;
-            }}
-
-            .popover-header h4 {{
-                margin: 0;
-                color: #333;
-            }}
-
-            .popover-body {{
-                /* Add styles for the body if needed */
-            }}
-
-            .close-popover {{
-                color: #aaa;
-                font-size: 20px;
-                font-weight: bold;
-                cursor: pointer;
-            }}
-
-            .close-popover:hover,
-            .close-popover:focus {{
-                color: #000;
-                text-decoration: none;
-            }}
-
-            .popover-content ul {{
-                list-style-type: disc;
-                margin-left: 20px;
-            }}
-            .popover-content li {{
-                margin-bottom: 5px;
-            }}
-
-
+            .popover-content {{ display: none; position: absolute; background-color: #f9f9f9; box-shadow: 0 8px 16px 0 rgba(0,0,0,0.2); padding: 15px; z-index: 1; border-radius: 8px; max-width: 500px; word-wrap: break-word; top: 50%; left: 50%; transform: translate(-50%, -50%); border: 1px solid #ddd; }}
+            .popover-header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 10px; }}
+            .popover-header h4 {{ margin: 0; color: #333; }}
+            .close-popover {{ color: #aaa; font-size: 20px; font-weight: bold; cursor: pointer; }}
+            .close-popover:hover, .close-popover:focus {{ color: #000; text-decoration: none; }}
+            .popover-content ul {{ list-style-type: disc; margin-left: 20px; }}
+            .popover-content li {{ margin-bottom: 5px; }}
         </style>
     </head>
     <body>
@@ -485,10 +406,9 @@ def gerar_html_newsletter(df: pd.DataFrame, interesse: str) -> str:
         noticia_dict = row.to_dict()
         html_content += gerar_card_noticia(noticia_dict, idx)
 
-    # Fim do HTML da newsletter
+    # Fim do HTML da newsletter e scripts
     html_content += """
         </div>
-
         <script>
             document.addEventListener('DOMContentLoaded', function() {
                 const buttons = document.querySelectorAll('.popover-button');
@@ -497,13 +417,11 @@ def gerar_html_newsletter(df: pd.DataFrame, interesse: str) -> str:
                 buttons.forEach(button => {
                     button.addEventListener('click', function() {
                         const target = document.querySelector(this.dataset.popoverTarget);
-                        // Hide all other popovers
                         document.querySelectorAll('.popover-content').forEach(popover => {
                             if (popover !== target) {
                                 popover.style.display = 'none';
                             }
                         });
-                        // Toggle the display of the target popover
                         target.style.display = target.style.display === 'none' ? 'block' : 'none';
                     });
                 });
@@ -514,7 +432,6 @@ def gerar_html_newsletter(df: pd.DataFrame, interesse: str) -> str:
                     });
                 });
 
-                // Hide popover when clicking outside
                 document.addEventListener('click', function(event) {
                     if (!event.target.classList.contains('popover-button') && !event.target.closest('.popover-content')) {
                         document.querySelectorAll('.popover-content').forEach(popover => {
@@ -535,6 +452,7 @@ def gerar_html_newsletter(df: pd.DataFrame, interesse: str) -> str:
     return html_content
 
 
+# --- Interface Streamlit ---
 
 st.title('Minha Newsletter')
 
@@ -542,13 +460,12 @@ INTERESSE = st.text_input('Interesse')
 TOP_NOTICIAS = st.number_input('Número de Notícias', value = 5)
 
 if st.button('Gerar Newsletter'):
-    if not TEMA or not INTERESSE:
-        st.warning('Por favor, preencha o Tema e o seu Interesse específico.')
+    # MELHORIA: A. Correção da variável TEMA (removida pois não era usada/definida)
+    if not INTERESSE:
+        st.warning('Por favor, preencha o seu Interesse específico.')
     else:
         # Etapa 1: Pega as notícias
         with st.spinner('Buscando as notícias mais recentes... 📰', show_time = True):
-            # ALTERADO: A chamada da função agora passa a variável 'INTERESSE' em vez de 'TEMA',
-            # pois a nova lógica gera os temas de busca a partir do interesse detalhado.
             pegas = pega_noticias(INTERESSE)
 
         # Etapa 2: Ordena por similaridade
@@ -556,7 +473,7 @@ if st.button('Gerar Newsletter'):
             top_noticias = ordenar_noticias_por_similaridade(
                 interesse=INTERESSE,
                 df_noticias=pegas,
-                top_n=int(TOP_NOTICIAS) # Garante que seja inteiro
+                top_n=int(TOP_NOTICIAS) 
             )
 
         # Etapa 3: Extrai o conteúdo completo
@@ -569,43 +486,7 @@ if st.button('Gerar Newsletter'):
 
         # Etapa 5: Gera o HTML final
         with st.spinner('Montando sua newsletter personalizada...  HTML', show_time = True):
-            final = pd.concat([extracoes, processados], axis=1)
-            newsletter_html = gerar_html_newsletter(final, INTERESSE)
-
-        st.success('Sua newsletter foi gerada com sucesso!')
-
-        # --- Exibe a Newsletter HTML na tela ---
-        st.subheader("Visualização da Newsletter")
-        st.components.v1.html(newsletter_html, height=600, scrolling=True)INTERESSE = st.text_input('Interesse')
-TOP_NOTICIAS = st.number_input('Número de Notícias', value = 5)
-
-if st.button('Gerar Newsletter'):
-    if not TEMA or not INTERESSE:
-        st.warning('Por favor, preencha o Tema e o seu Interesse específico.')
-    else:
-        # Etapa 1: Pega as notícias
-        with st.spinner('Buscando as notícias mais recentes... 📰', show_time = True):
-            # pois a nova lógica gera os temas de busca a partir do interesse detalhado.
-            pegas = pega_noticias(INTERESSE)
-
-        # Etapa 2: Ordena por similaridade
-        with st.spinner('Analisando e ordenando as notícias por relevância... 🧠', show_time = True):
-            top_noticias = ordenar_noticias_por_similaridade(
-                interesse=INTERESSE,
-                df_noticias=pegas,
-                top_n=int(TOP_NOTICIAS) # Garante que seja inteiro
-            )
-
-        # Etapa 3: Extrai o conteúdo completo
-        with st.spinner('Extraindo o conteúdo completo das principais notícias... 📄', show_time = True):
-            extracoes = extrair_conteudo_noticias(top_noticias)
-
-        # Etapa 4: Processa com a IA
-        with st.spinner('Criando resumos com a ajuda da IA... ✨', show_time = True):
-            processados = processa_noticias_com_gemini(extracoes)
-
-        # Etapa 5: Gera o HTML final
-        with st.spinner('Montando sua newsletter personalizada...  HTML', show_time = True):
+            # Concatenar garantindo alinhamento pelo índice
             final = pd.concat([extracoes, processados], axis=1)
             newsletter_html = gerar_html_newsletter(final, INTERESSE)
 
@@ -614,3 +495,5 @@ if st.button('Gerar Newsletter'):
         # --- Exibe a Newsletter HTML na tela ---
         st.subheader("Visualização da Newsletter")
         st.components.v1.html(newsletter_html, height=600, scrolling=True)
+
+# MELHORIA: B. Código duplicado removido (o final do arquivo original continha uma cópia do bloco acima)
