@@ -177,7 +177,7 @@ def extrair_conteudo_noticias(df_noticias):
         # Mapeia futuros para os índices originais
         future_to_index = {}
         for index, row in df_noticias.iterrows():
-            url = f"{row['link']}"
+            url = f"https://r.jina.ai/{row['link']}"
             future = executor.submit(_fetch_single_article, url, headers, row['title'])
             future_to_index[future] = index
 
