@@ -121,32 +121,57 @@ def ordenar_noticias_por_similaridade(interesse, df_noticias, top_n=10):
     if df_noticias.empty:
         return df_noticias
 
+    df_noticias = df_noticias[df_noticias['title'].notna()]  # Remove NaN
+    df_noticias = df_noticias[df_noticias['title'].str.strip() != ""] # Remove vazios
+    df_noticias.reset_index(drop=True, inplace=True) # Reseta o índice para alinhar com o futuro loop
+
+    if df_noticias.empty:
+        return df_noticias
+
     TEXTOS = df_noticias['title'].to_list()
 
     client = genai.Client(api_key = st.secrets['GEMINI_API_KEY'])
 
-    result = client.models.embed_content(
-                model="gemini-embedding-001",
-                contents=interesse)
+    # Gera o embedding do interesse do usuário
+    try:
+        result = client.models.embed_content(
+                    model="gemini-embedding-001",
+                    contents=interesse)
+        interesse_embed = np.array(result.embeddings[0].values)
+    except Exception as e:
+        print(f"Erro ao gerar embedding do interesse: {e}")
+        return df_noticias.head(top_n)
 
-    interesse_embed  = np.array(result.embeddings[0].values)
-
-    # Processar os textos em lotes de 100
     VETORES = []
+    
     for i in range(0, len(TEXTOS), 100):
         batch_textos = TEXTOS[i:i+100]
-        embeddings_result = client.models.embed_content(
-            model="gemini-embedding-001",
-            contents=batch_textos,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
-        ).embeddings
-        VETORES.extend([np.array(e.values) for e in embeddings_result])
+        try:
+            embeddings_result = client.models.embed_content(
+                model="gemini-embedding-001",
+                contents=batch_textos,
+                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+            ).embeddings
+            VETORES.extend([np.array(e.values) for e in embeddings_result])
+        except Exception as e:
+            print(f"Erro ao gerar embeddings do lote {i}: {e}")
+            
+            dimensao = len(interesse_embed)
+            VETORES.extend([np.zeros(dimensao) for _ in batch_textos])
+
+    if len(VETORES) != len(df_noticias):
+        print(f"Aviso: Discrepância de tamanho. Dataframe: {len(df_noticias)}, Vetores: {len(VETORES)}")
+        # Ajuste de segurança: corta o maior para igualar o menor
+        min_len = min(len(df_noticias), len(VETORES))
+        df_noticias = df_noticias.iloc[:min_len]
+        VETORES = VETORES[:min_len]
 
     interesse_embed_2d = interesse_embed.reshape(1, -1)
-    similaridades = [cosine_similarity(interesse_embed_2d, v.reshape(1, -1))[0][0] for v in VETORES]
-
-    df_noticias['score'] = similaridades
-    df_noticias.sort_values(by='score', ascending=False, inplace = True)
+    
+    if VETORES:
+        similaridades = [cosine_similarity(interesse_embed_2d, v.reshape(1, -1))[0][0] for v in VETORES]
+        df_noticias['score'] = similaridades
+        df_noticias.sort_values(by='score', ascending=False, inplace = True)
 
     return df_noticias.head(top_n).reset_index(drop=True)
 
