@@ -284,24 +284,6 @@ def processa_noticias_com_gemini(articles_df):
     processados_df = pd.DataFrame(lista_de_dicionarios)
     return processados_df
 
-
-Este código cobre a parte de geração de HTML e a interface do Streamlit. Fiz várias melhorias focadas na experiência do usuário e no funcionamento correto dentro do ambiente do Streamlit.
-
-Principais Melhorias Realizadas:
-Persistência com st.session_state: O maior problema de apps Streamlit é que, ao clicar em um botão, o app roda de novo e perde o que estava na tela. Adicionei lógica para salvar a newsletter gerada na memória, assim ela não some.
-
-Botão de Download: Adicionei um botão nativo (st.download_button) para o usuário baixar o arquivo .html final.
-
-Correção do CSS (Pop-up): Mudei a posição dos modais (popovers) de absolute para fixed.
-
-Por que? Com absolute, se o usuário rolar a página até a última notícia e clicar em "Resumo", o pop-up abriria lá no topo da página, fora de visão. Com fixed, ele abre sempre no meio da tela visível.
-
-Preview Nativo: Adicionei uma aba "Dados Brutos" para você conseguir inspecionar a tabela caso o HTML falhe ou fique desformatado.
-
-Aqui está o código melhorado. Substitua a parte final do seu arquivo (as funções gerar_card..., gerar_html... e a parte da Interface Streamlit) por este bloco:
-
-Python
-
 def gerar_card_noticia(noticia: dict, idx: int) -> str:
     """Gera HTML para um card de notícia a partir de um dicionário."""
 
