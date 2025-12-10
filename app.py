@@ -285,6 +285,23 @@ def processa_noticias_com_gemini(articles_df):
     return processados_df
 
 
+Este código cobre a parte de geração de HTML e a interface do Streamlit. Fiz várias melhorias focadas na experiência do usuário e no funcionamento correto dentro do ambiente do Streamlit.
+
+Principais Melhorias Realizadas:
+Persistência com st.session_state: O maior problema de apps Streamlit é que, ao clicar em um botão, o app roda de novo e perde o que estava na tela. Adicionei lógica para salvar a newsletter gerada na memória, assim ela não some.
+
+Botão de Download: Adicionei um botão nativo (st.download_button) para o usuário baixar o arquivo .html final.
+
+Correção do CSS (Pop-up): Mudei a posição dos modais (popovers) de absolute para fixed.
+
+Por que? Com absolute, se o usuário rolar a página até a última notícia e clicar em "Resumo", o pop-up abriria lá no topo da página, fora de visão. Com fixed, ele abre sempre no meio da tela visível.
+
+Preview Nativo: Adicionei uma aba "Dados Brutos" para você conseguir inspecionar a tabela caso o HTML falhe ou fique desformatado.
+
+Aqui está o código melhorado. Substitua a parte final do seu arquivo (as funções gerar_card..., gerar_html... e a parte da Interface Streamlit) por este bloco:
+
+Python
+
 def gerar_card_noticia(noticia: dict, idx: int) -> str:
     """Gera HTML para um card de notícia a partir de um dicionário."""
 
@@ -294,14 +311,19 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
     resumo_breve = noticia.get('resumo_curto', '')
     resumo_expandido = noticia.get('resumo_maior', '')
     tags = noticia.get('tags_relevantes', [])
-    url_original = noticia.get('link', '#') # Link vem do dataframe original (concatenação)
+    # Garante que link existe; usa # se não tiver
+    url_original = noticia.get('link', '#') 
     caminho_imagem = noticia.get('links_de_imagens', [])
     prompt_satira_imagem = noticia.get('prompt_satira_imagem', '')
     pontos_principais = noticia.get('pontos_principais', [])
 
-    imagem_url = caminho_imagem[0] if caminho_imagem else ''
-    tags_str = ', '.join(tags) if tags else ''
-    pontos_principais_html = "".join([f"<li>{p}</li>" for p in pontos_principais]) if pontos_principais else ""
+    # Tratamento seguro para listas vazias ou None
+    imagem_url = caminho_imagem[0] if (isinstance(caminho_imagem, list) and caminho_imagem) else ''
+    tags_str = ', '.join(tags) if (isinstance(tags, list) and tags) else ''
+    
+    pontos_principais_html = ""
+    if isinstance(pontos_principais, list) and pontos_principais:
+        pontos_principais_html = "".join([f"<li>{p}</li>" for p in pontos_principais])
 
     card_html = f"""
     <div class="card-noticia">
@@ -323,9 +345,9 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
 
                 <div class="button-array">
                     <button class="popover-button" data-popover-target="#popover-resumo-{idx}">Resumo Completo</button>
-                    <button class="popover-button" data-popover-target="#popover-tags-{idx}">Tags Relevantes</button>
-                    <button class="popover-button" data-popover-target="#popover-satira-{idx}">Prompt de Sátira</button>
-                    <button class="popover-button" data-popover-target="#popover-pontos-{idx}">Pontos Principais</button>
+                    <button class="popover-button" data-popover-target="#popover-tags-{idx}">Tags</button>
+                    <button class="popover-button" data-popover-target="#popover-satira-{idx}">Prompt Imagem</button>
+                    <button class="popover-button" data-popover-target="#popover-pontos-{idx}">Pontos Chave</button>
                 </div>
 
                 <a href="{url_original}" target="_blank" class="btn-ler-mais">
@@ -334,7 +356,7 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
             </div>
         </div>
 
-        <div id="popover-resumo-{idx}" class="popover-content" style="display: none;">
+        <div id="popover-resumo-{idx}" class="popover-content">
             <div class="popover-header">
                 <h4>Resumo Completo</h4>
                  <span class="close-popover">&times;</span>
@@ -344,7 +366,7 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
             </div>
         </div>
 
-        <div id="popover-tags-{idx}" class="popover-content" style="display: none;">
+        <div id="popover-tags-{idx}" class="popover-content">
              <div class="popover-header">
                 <h4>Tags Relevantes</h4>
                  <span class="close-popover">&times;</span>
@@ -354,7 +376,7 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
             </div>
         </div>
 
-        <div id="popover-satira-{idx}" class="popover-content" style="display: none;">
+        <div id="popover-satira-{idx}" class="popover-content">
             <div class="popover-header">
                 <h4>Prompt de Sátira</h4>
                 <span class="close-popover">&times;</span>
@@ -364,7 +386,7 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
             </div>
         </div>
 
-        <div id="popover-pontos-{idx}" class="popover-content" style="display: none;">
+        <div id="popover-pontos-{idx}" class="popover-content">
             <div class="popover-header">
                 <h4>Pontos Principais</h4>
                  <span class="close-popover">&times;</span>
@@ -380,145 +402,220 @@ def gerar_card_noticia(noticia: dict, idx: int) -> str:
 def gerar_html_newsletter(df: pd.DataFrame, interesse: str) -> str:
     """Gera um arquivo HTML para a newsletter a partir do DataFrame processado."""
 
-    # Início do HTML da newsletter (CSS mantido do original)
     html_content = f"""
     <!DOCTYPE html>
     <html lang="pt-BR">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Newsletter sobre {interesse}</title>
+        <title>Newsletter: {interesse}</title>
         <style>
-            body {{ font-family: sans-serif; line-height: 1.6; margin: 20px; background-color: #e0e0e0;}} 
-            .container {{ max-width: 800px; margin: auto; background: #f9f9f9; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }}
-            .header {{ text-align: center; margin-bottom: 30px; }}
-            .header h1 {{ color: #333; }}
-            .header p {{ color: #666; }}
-            .card-noticia {{ border: 1px solid #ddd; margin-bottom: 20px; border-radius: 8px; overflow: hidden; background: #d3dbde; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); position: relative;}} 
-            .card-header {{ background: #d3dbde; padding: 15px; border-bottom: 1px solid #ddd; }} 
-            .card-titulo {{ margin: 0; color: #007bff; }}
-            .card-meta {{ font-size: 0.9em; color: #555; margin-top: 5px; }}
-            .card-meta span {{ margin-right: 15px; }}
-            .card-content {{ display: flex; flex-wrap: wrap; padding: 15px; }}
-            .card-imagem {{ flex: 1 1 150px; margin-right: 15px; }}
-            .card-imagem img {{ max-width: 100%; height: auto; border-radius: 4px; }}
-            .card-texto {{ flex: 2 1 300px; }}
-            .resumo-breve {{ font-weight: normal; margin-bottom: 10px; }}
-            .button-array {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 10px; }} 
-            .popover-button {{ padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 0.9em; text-align: center; }}
-            .popover-button:hover {{ background-color: #0056b3; }}
-            .btn-ler-mais {{ display: block; width: 100%; background-color: #28a745; color: white; padding: 12px 15px; text-decoration: none; border-radius: 5px; margin-top: 15px; text-align: center; font-size: 1.1em; transition: background-color 0.3s ease; }}
-            .btn-ler-mais:hover {{ background-color: #218838; }}
-            .footer {{ text-align: center; margin-top: 30px; font-size: 0.8em; color: #777; }}
-            .popover-content {{ display: none; position: absolute; background-color: #f9f9f9; box-shadow: 0 8px 16px 0 rgba(0,0,0,0.2); padding: 15px; z-index: 1; border-radius: 8px; max-width: 500px; word-wrap: break-word; top: 50%; left: 50%; transform: translate(-50%, -50%); border: 1px solid #ddd; }}
-            .popover-header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 10px; }}
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; margin: 0; padding: 20px; background-color: #f0f2f5; color: #333; }} 
+            .container {{ max-width: 800px; margin: auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }}
+            .header {{ text-align: center; margin-bottom: 40px; border-bottom: 2px solid #eee; padding-bottom: 20px; }}
+            .header h1 {{ color: #2c3e50; margin: 0; font-size: 2.5em; }}
+            
+            /* Card Styles */
+            .card-noticia {{ border: 1px solid #e1e4e8; margin-bottom: 30px; border-radius: 12px; overflow: hidden; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.05); transition: transform 0.2s; }} 
+            .card-noticia:hover {{ transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }}
+            
+            .card-header {{ background: #f8f9fa; padding: 15px 20px; border-bottom: 1px solid #e1e4e8; }} 
+            .card-titulo {{ margin: 0; color: #1a73e8; font-size: 1.25em; }}
+            .card-meta {{ font-size: 0.85em; color: #666; margin-top: 8px; display: flex; gap: 15px; }}
+            
+            .card-content {{ display: flex; flex-wrap: wrap; padding: 20px; gap: 20px; }}
+            .card-imagem {{ flex: 1 1 200px; max-width: 300px; }}
+            .card-imagem img {{ width: 100%; height: auto; border-radius: 8px; object-fit: cover; }}
+            .card-texto {{ flex: 2 1 300px; display: flex; flex-direction: column; }}
+            
+            .resumo-breve {{ font-size: 1em; color: #444; margin-bottom: 20px; }}
+            
+            /* Buttons */
+            .button-array {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }} 
+            .popover-button {{ flex: 1; min-width: 120px; padding: 8px 12px; background-color: #e8f0fe; color: #1967d2; border: 1px solid #dadce0; border-radius: 4px; cursor: pointer; font-size: 0.9em; font-weight: 500; transition: background 0.2s; }}
+            .popover-button:hover {{ background-color: #d2e3fc; }}
+            
+            .btn-ler-mais {{ margin-top: auto; display: block; width: 100%; background-color: #1a73e8; color: white; padding: 12px; text-decoration: none; border-radius: 6px; text-align: center; font-weight: bold; transition: background 0.2s; }}
+            .btn-ler-mais:hover {{ background-color: #1557b0; }}
+
+            /* Popovers (Modais) FIXO PARA FUNCIONAR NO STREAMLIT */
+            .popover-content {{ 
+                display: none; 
+                position: fixed; /* IMPORTANTE: Fixed para centralizar na tela visível */
+                top: 50%; 
+                left: 50%; 
+                transform: translate(-50%, -50%); 
+                width: 90%;
+                max-width: 500px;
+                max-height: 80vh;
+                overflow-y: auto;
+                background-color: #fff; 
+                box-shadow: 0 10px 25px rgba(0,0,0,0.2); 
+                padding: 20px; 
+                z-index: 9999; 
+                border-radius: 12px; 
+                border: 1px solid #ddd; 
+            }}
+            .popover-header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 15px; }}
             .popover-header h4 {{ margin: 0; color: #333; }}
-            .close-popover {{ color: #aaa; font-size: 20px; font-weight: bold; cursor: pointer; }}
-            .close-popover:hover, .close-popover:focus {{ color: #000; text-decoration: none; }}
-            .popover-content ul {{ list-style-type: disc; margin-left: 20px; }}
-            .popover-content li {{ margin-bottom: 5px; }}
+            .close-popover {{ color: #999; font-size: 24px; font-weight: bold; cursor: pointer; line-height: 1; }}
+            .close-popover:hover {{ color: #333; }}
+            
+            /* Overlay Fundo Escuro */
+            .overlay {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9998; }}
         </style>
     </head>
     <body>
+        <div class="overlay" id="modal-overlay"></div>
         <div class="container">
             <div class="header">
-                <h1>Newsletter sobre {interesse}</h1>
+                <h1>Newsletter: {interesse}</h1>
+                <p>Gerada automaticamente por IA</p>
             </div>
             """
 
-    # Adiciona cada card de notícia
     for idx, row in df.iterrows():
         noticia_dict = row.to_dict()
         html_content += gerar_card_noticia(noticia_dict, idx)
 
-    # Fim do HTML da newsletter e scripts
     html_content += """
         </div>
         <script>
             document.addEventListener('DOMContentLoaded', function() {
-                const buttons = document.querySelectorAll('.popover-button');
-                const closeButtons = document.querySelectorAll('.close-popover');
+                const overlay = document.getElementById('modal-overlay');
+                
+                function fecharTodos() {
+                    document.querySelectorAll('.popover-content').forEach(el => el.style.display = 'none');
+                    overlay.style.display = 'none';
+                }
 
-                buttons.forEach(button => {
-                    button.addEventListener('click', function() {
-                        const target = document.querySelector(this.dataset.popoverTarget);
-                        document.querySelectorAll('.popover-content').forEach(popover => {
-                            if (popover !== target) {
-                                popover.style.display = 'none';
-                            }
-                        });
-                        target.style.display = target.style.display === 'none' ? 'block' : 'none';
+                // Abrir popover
+                document.querySelectorAll('.popover-button').forEach(button => {
+                    button.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        const targetId = this.dataset.popoverTarget;
+                        const target = document.querySelector(targetId);
+                        
+                        fecharTodos(); // Fecha outros abertos
+                        
+                        if(target) {
+                            target.style.display = 'block';
+                            overlay.style.display = 'block';
+                        }
                     });
                 });
 
-                closeButtons.forEach(button => {
-                    button.addEventListener('click', function() {
-                        this.closest('.popover-content').style.display = 'none';
-                    });
+                // Fechar ao clicar no X
+                document.querySelectorAll('.close-popover').forEach(btn => {
+                    btn.addEventListener('click', fecharTodos);
                 });
 
-                document.addEventListener('click', function(event) {
-                    if (!event.target.classList.contains('popover-button') && !event.target.closest('.popover-content')) {
-                        document.querySelectorAll('.popover-content').forEach(popover => {
-                            popover.style.display = 'none';
-                        });
-                    }
-                });
+                // Fechar ao clicar no fundo escuro
+                overlay.addEventListener('click', fecharTodos);
             });
         </script>
     </body>
     </html>
     """
-
-    with open("newsletter.html", "w", encoding="utf-8") as f:
-        f.write(html_content)
-    print("Newsletter HTML gerada e salva como 'newsletter.html'")
-
     return html_content
-
 
 # --- Interface Streamlit ---
 
-st.title('Minha Newsletter')
+st.title('🤖 Minha Newsletter com IA')
 
-INTERESSE = st.text_input('Interesse')
-TOP_NOTICIAS = st.number_input('Número de Notícias', value = 5)
+# Sidebar para inputs deixa a interface principal mais limpa
+with st.sidebar:
+    st.header("Configurações")
+    INTERESSE = st.text_input('Tema de Interesse', placeholder="Ex: IA na Medicina")
+    TOP_NOTICIAS = st.number_input('Número de Notícias', min_value=1, max_value=20, value=5)
+    btn_gerar = st.button('Gerar Newsletter', type="primary")
 
-if st.button('Gerar Newsletter'):
-    # MELHORIA: A. Correção da variável TEMA (removida pois não era usada/definida)
+# Inicializa Session State para guardar os dados se ainda não existirem
+if "newsletter_data" not in st.session_state:
+    st.session_state.newsletter_data = None
+if "newsletter_html" not in st.session_state:
+    st.session_state.newsletter_html = None
+
+# Lógica de Geração
+if btn_gerar:
     if not INTERESSE:
-        st.warning('Por favor, preencha o seu Interesse específico.')
+        st.warning('⚠️ Por favor, preencha o seu Interesse específico na barra lateral.')
     else:
-        # Etapa 1: Pega as notícias
-        with st.spinner('Buscando as notícias mais recentes... 📰', show_time = True):
-            pegas = pega_noticias(INTERESSE)
+        try:
+            # 1. Pega as notícias
+            with st.spinner('📰 Buscando as notícias mais recentes...'):
+                pegas = pega_noticias(INTERESSE)
+            
+            if pegas.empty:
+                st.error("Nenhuma notícia encontrada para este tema. Tente termos mais gerais.")
+            else:
+                # 2. Ordena
+                with st.spinner('🧠 Analisando relevância com Gemini...'):
+                    # (Certifique-se que sua função 'ordenar...' tem a correção de strings vazias que passei antes)
+                    top_noticias = ordenar_noticias_por_similaridade(
+                        interesse=INTERESSE,
+                        df_noticias=pegas,
+                        top_n=int(TOP_NOTICIAS) 
+                    )
 
-        # Etapa 2: Ordena por similaridade
-        with st.spinner('Analisando e ordenando as notícias por relevância... 🧠', show_time = True):
-            top_noticias = ordenar_noticias_por_similaridade(
-                interesse=INTERESSE,
-                df_noticias=pegas,
-                top_n=int(TOP_NOTICIAS) 
-            )
+                # 3. Extrai conteúdo
+                with st.spinner('📄 Lendo o conteúdo das notícias (Jina AI)...'):
+                    extracoes = extrair_conteudo_noticias(top_noticias)
 
-        # Etapa 3: Extrai o conteúdo completo
-        with st.spinner('Extraindo o conteúdo completo das principais notícias... 📄', show_time = True):
-            extracoes = extrair_conteudo_noticias(top_noticias)
+                # 4. Processa com IA
+                with st.spinner('✨ Gerando resumos e insights...'):
+                    processados = processa_noticias_com_gemini(extracoes)
 
-        # Etapa 4: Processa com a IA
-        with st.spinner('Criando resumos com a ajuda da IA... ✨', show_time = True):
-            processados = processa_noticias_com_gemini(extracoes)
+                # 5. Montagem Final (Garante alinhamento)
+                with st.spinner('🔨 Montando HTML...'):
+                    # Reseta índices para garantir concatenação correta
+                    extracoes.reset_index(drop=True, inplace=True)
+                    processados.reset_index(drop=True, inplace=True)
+                    
+                    final_df = pd.concat([extracoes, processados], axis=1)
+                    
+                    # Gera o HTML e Salva no Session State
+                    st.session_state.newsletter_data = final_df
+                    st.session_state.newsletter_html = gerar_html_newsletter(final_df, INTERESSE)
+                    
+                    st.success('Newsletter gerada com sucesso!')
 
-        # Etapa 5: Gera o HTML final
-        with st.spinner('Montando sua newsletter personalizada...  HTML', show_time = True):
-            # Concatenar garantindo alinhamento pelo índice
-            final = pd.concat([extracoes, processados], axis=1)
-            newsletter_html = gerar_html_newsletter(final, INTERESSE)
+        except Exception as e:
+            st.error(f"Ocorreu um erro durante o processamento: {e}")
+            # Dica: imprima o erro completo no terminal para debug
+            print(e)
 
-        st.success('Sua newsletter foi gerada com sucesso!')
+# Exibição dos Resultados (Se existirem no Session State)
+if st.session_state.newsletter_html:
+    
+    st.divider()
+    
+    # Colunas para botões de ação
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        # Botão de Download do HTML
+        st.download_button(
+            label="📥 Baixar Newsletter HTML",
+            data=st.session_state.newsletter_html,
+            file_name=f"newsletter_{INTERESSE.replace(' ', '_')}.html",
+            mime="text/html"
+        )
+    
+    with col2:
+        if st.button("🔄 Limpar Resultados"):
+            st.session_state.newsletter_data = None
+            st.session_state.newsletter_html = None
+            st.rerun()
 
-        # --- Exibe a Newsletter HTML na tela ---
-        st.subheader("Visualização da Newsletter")
-        st.components.v1.html(newsletter_html, height=600, scrolling=True)
-
-# MELHORIA: B. Código duplicado removido (o final do arquivo original continha uma cópia do bloco acima)
+    # Abas para visualização
+    tab1, tab2 = st.tabs(["📧 Visualização Web", "📊 Dados Brutos"])
+    
+    with tab1:
+        st.caption("Esta é uma prévia interativa. Use o botão de download para ver em tela cheia no seu navegador.")
+        # Height aumentado e scrolling ativado
+        st.components.v1.html(st.session_state.newsletter_html, height=800, scrolling=True)
+        
+    with tab2:
+        st.caption("Tabela com os dados extraídos e gerados pela IA.")
+        st.dataframe(st.session_state.newsletter_data)
